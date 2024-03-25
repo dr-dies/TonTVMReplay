@@ -23,7 +23,7 @@ def get_diff(tx1, tx2):
     del tx1_tlb
     del tx2_tlb
 
-    return str(diff), address
+    return diff, address
 
 
 @curry
@@ -41,6 +41,7 @@ def process_blocks(data, config_override: dict = None):
     prev_block_data = [list(reversed(block['prev_block_data'][0])), block['prev_block_data'][1]]
     em.set_prev_blocks_info(prev_block_data)
     em.set_libs(VmDict(256, False, cell_root=Cell(block['libs'])))
+    importance_mapping = load_importance_mapping(os.getenv("COLOR_SCHEMA_CFG_PATH", 'tlb_color.cfg'))
 
     for tx in txs:
         current_tx_cs = tx['tx'].begin_parse()
@@ -81,8 +82,10 @@ def process_blocks(data, config_override: dict = None):
         # Emulation transaction equal current transaction
         if em.transaction.get_hash() != tx['tx'].get_hash():
             diff, address = get_diff(tx['tx'], em.transaction.to_cell())
+            if importance_mapping is not None:
+                diff = add_color_to_diff(diff, importance_mapping)
             go_as_success = False
-            out.append({'success': False, 'diff': diff, 'address': f"{block['block_id'].id.workchain}:{address}",
+            out.append({'success': False, 'diff': str(diff), 'address': f"{block['block_id'].id.workchain}:{address}",
                         'expected': tx['tx'].get_hash(), 'got': em.transaction.get_hash()})
 
         # Update account state, go to next transaction
@@ -91,6 +94,32 @@ def process_blocks(data, config_override: dict = None):
             out.append({'success': True})
 
     return out
+
+
+def add_color_to_diff(diff, importance_mapping):
+    for key, value in diff['values_changed'].items():
+        if key in importance_mapping:
+            value['color'] = importance_mapping[key]
+        else:
+            value['color'] = 'default'
+
+    return diff
+
+
+def load_importance_mapping(file_path):
+    try:
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+            if not lines:
+                return None
+            importance_mapping = {}
+            for line in lines:
+                if line.strip() and not line.startswith("#"):
+                    key, value = line.strip().split('=')
+                    importance_mapping["root" + key] = value.strip()
+            return importance_mapping
+    except FileNotFoundError:
+        return None
 
 
 def process_result(outq):
