@@ -83,10 +83,19 @@ def process_blocks(data, config_override: dict = None):
         if em.transaction.get_hash() != tx['tx'].get_hash():
             diff, address = get_diff(tx['tx'], em.transaction.to_cell())
             if importance_mapping is not None:
-                diff = add_color_to_diff(diff, importance_mapping)
-            go_as_success = False
-            out.append({'success': False, 'diff': str(diff), 'address': f"{block['block_id'].id.workchain}:{address}",
-                        'expected': tx['tx'].get_hash(), 'got': em.transaction.get_hash()})
+                diff, level = add_color_to_diff(diff, importance_mapping)
+                if level != 'red':
+                    go_as_success = False
+                    if level == 'yellow':
+                        scs = True
+                    else:
+                        scs = False
+                    out.append({'success': scs, 'diff': str(diff), 'address': f"{block['block_id'].id.workchain}:{address}",
+                                'expected': tx['tx'].get_hash(), 'got': em.transaction.get_hash()})
+            else:
+                go_as_success = False
+                out.append({'success': False, 'diff': str(diff), 'address': f"{block['block_id'].id.workchain}:{address}",
+                            'expected': tx['tx'].get_hash(), 'got': em.transaction.get_hash()})
 
         # Update account state, go to next transaction
         account_state = em.account.to_cell()
@@ -97,14 +106,32 @@ def process_blocks(data, config_override: dict = None):
 
 
 def add_color_to_diff(diff, importance_mapping):
+    colored_diff = {}
+    level = 'red'
+    has_yellow = False
+    has_green = False
+
     for key, value in diff['values_changed'].items():
-        if key in importance_mapping:
-            value['color'] = importance_mapping[key]
-        else:
-            value['color'] = 'default'
+        color = importance_mapping.get(key, 'default')
+        if color == 'default':
+            color = 'yellow' # Для дефолта помечаем как варнинг, но будем считать как failed
+            has_yellow = True
+            value['color'] = color
+            colored_diff[key] = value
+        elif color != 'red':
+            value['color'] = color
+            colored_diff[key] = value
+            if color == 'yellow':
+                has_yellow = True
+            elif color == 'green':
+                has_green = True
 
-    return diff
+    if has_green:
+        level = 'green'
+    elif has_yellow:
+        level = 'yellow'
 
+    return colored_diff, level
 
 def load_importance_mapping(file_path):
     try:
@@ -128,19 +155,24 @@ def process_result(outq):
         total_txs.append(outq.get())
 
     tmp_s = 0
+    tmp_e = 0
     tmp_u = []
     if len(total_txs) > 0:
         for chunk in total_txs:
             for i in chunk:
                 if i['success']:
                     tmp_s += 1
+                    if 'diff' in i:
+                        tmp_u.append(i)
                 else:
                     tmp_u.append(i)
+                    tmp_e += 1
+
 
         if LOGLEVEL > 1:
-            logger.warning(f"Emulator status: {tmp_s} success, {len(tmp_u)} unsuccess")
+            logger.warning(f"Emulator status: {tmp_s} success, {tmp_e} unsuccess")
 
-        if len(tmp_u) > 0 and LOGLEVEL > 1:
+        if tmp_e > 0 and LOGLEVEL > 1:
             cnt = Counter()
             for i in tmp_u:
                 cnt[i['address']] += 1
@@ -148,7 +180,7 @@ def process_result(outq):
             logger.error(f"Unique addreses errors: {len(cnt)}, most common: ")
             logger.error(cnt.most_common(5))
 
-    return tmp_s, tmp_u
+    return tmp_s, tmp_u, tmp_e
 
 
 def main():
@@ -201,22 +233,25 @@ def main():
     scanner.start()
 
     success = 0
+    errors = 0
     unsuccess = []
 
     while not scanner.done:
-        tmp_s, tmp_u = process_result(outq)
+        tmp_s, tmp_u, tmp_e = process_result(outq)
         success += tmp_s
+        errors += tmp_e
         unsuccess.extend(tmp_u)
         sleep(1)
 
     # After done some data can be in queue
-    tmp_s, tmp_u = process_result(outq)
+    tmp_s, tmp_u, tmp_e = process_result(outq)
     success += tmp_s
+    errors += tmp_e
     unsuccess.extend(tmp_u)
 
-    logger.warning(f"Final emulator status: {success} success, {len(unsuccess)} unsuccess")
+    logger.warning(f"Final emulator status: {success} success, {errors} unsuccess")
 
-    if len(unsuccess) > 0:
+    if errors > 0:
         cnt = Counter()
         for i in unsuccess:
             cnt[i['address']] += 1
