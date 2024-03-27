@@ -170,7 +170,7 @@ def process_result(outq):
 
 
         if LOGLEVEL > 1:
-            logger.warning(f"Emulator status: {tmp_s} success, {tmp_e} unsuccess")
+            logger.warning(f"Emulator status: {tmp_s} success, {len(tmp_u)-tmp_e} warnings, {tmp_e} unsuccess")
 
         if tmp_e > 0 and LOGLEVEL > 1:
             cnt = Counter()
@@ -249,7 +249,7 @@ def main():
     errors += tmp_e
     unsuccess.extend(tmp_u)
 
-    logger.warning(f"Final emulator status: {success} success, {errors} unsuccess")
+    logger.warning(f"Final emulator status: {success} success,{len(tmp_u)-errors} warnings, {errors} unsuccess")
 
     if errors > 0:
         cnt = Counter()
